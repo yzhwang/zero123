@@ -39,14 +39,14 @@ parser.add_argument(
     required=True,
     help="Path to the object file",
 )
-parser.add_argument("--output_dir", type=str, default="~/.objaverse/hf-objaverse-v1/views_whole_sphere")
+parser.add_argument("--output_dir", type=str, default="views")
 parser.add_argument(
     "--engine", type=str, default="CYCLES", choices=["CYCLES", "BLENDER_EEVEE"]
 )
 parser.add_argument("--scale", type=float, default=0.8)
 parser.add_argument("--num_images", type=int, default=8)
 parser.add_argument("--camera_dist", type=int, default=1.2)
-    
+
 argv = sys.argv[sys.argv.index("--") + 1 :]
 args = parser.parse_args(argv)
 
@@ -214,6 +214,23 @@ def scene_meshes():
         if isinstance(obj.data, (bpy.types.Mesh)):
             yield obj
 
+def get_K_from_blender(cam):
+    scale = scene.render.resolution_percentage / 100
+    width = scene.render.resolution_x * scale # px
+    height = scene.render.resolution_y * scale # px
+
+    camdata = cam.data
+
+    aspect_ratio = width / height
+    K = np.zeros((3,3), dtype=np.float32)
+    K[0][0] = width / 2 / np.tan(camdata.angle / 2)
+    K[1][1] = height / 2. / np.tan(camdata.angle / 2) * aspect_ratio
+    K[0][2] = width / 2.
+    K[1][2] = height / 2.
+    K[2][2] = 1.
+    K.transpose()
+    return K
+
 # function from https://github.com/panmari/stanford-shapenet-renderer/blob/master/render_blender.py
 def get_3x4_RT_matrix_from_blender(cam):
     # bcam stands for blender camera
@@ -222,7 +239,7 @@ def get_3x4_RT_matrix_from_blender(cam):
     #     (0, 1, 0),
     #     (0, 0, 1)))
 
-    # Transpose since the rotation is object rotation, 
+    # Transpose since the rotation is object rotation,
     # and we want coordinate rotation
     # R_world2bcam = cam.rotation_euler.to_matrix().transposed()
     # T_world2bcam = -1*R_world2bcam @ location
@@ -233,7 +250,7 @@ def get_3x4_RT_matrix_from_blender(cam):
 
     # Convert camera location to translation vector used in coordinate changes
     # T_world2bcam = -1*R_world2bcam @ cam.location
-    # Use location from matrix_world to account for constraints:     
+    # Use location from matrix_world to account for constraints:
     T_world2bcam = -1*R_world2bcam @ location
 
     # # Build the coordinate transform matrix from world to computer vision camera
@@ -301,8 +318,13 @@ def save_images(object_file: str) -> None:
 
         # save camera RT matrix
         RT = get_3x4_RT_matrix_from_blender(camera)
-        RT_path = os.path.join(args.output_dir, object_uid, f"{i:03d}.npy")
+        RT_path = os.path.join(args.output_dir, object_uid, f"{i:03d}-RT.npy")
         np.save(RT_path, RT)
+
+        # save camera K matrix
+        K = get_K_from_blender(camera)
+        K_path = os.path.join(args.output_dir, object_uid, f"{i:03d}-K.npy")
+        np.save(K_path, K)
 
 
 def download_object(object_url: str) -> str:
