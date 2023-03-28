@@ -42,12 +42,18 @@ def worker(
         # Perform some operation on the item
         print(item, gpu)
         command = (
-            f" CUDA_VISIBLE_DEVICES={gpu} "
-            f" blender-3.2.2-linux-x64/blender -b -P scripts/blender_script.py --"
+            f"export DISPLAY=:0.{gpu} &&"
+            f" sudo blender-3.2.2-linux-x64/blender -b -P scripts/blender_script.py --"
             f" --object_path {item}"
         )
         print(command)
-        subprocess.run(command, shell=True)
+
+        # Run the subprocess and wait for completion
+        process = subprocess.run(command, shell=True, stderr=subprocess.PIPE, text=True)
+
+        # Check if Blender process finished successfully
+        if process.returncode != 0:
+            print(f"Error: {process.stderr}")
 
         with count.get_lock():
             count.value += 1
@@ -58,7 +64,6 @@ def worker(
 if __name__ == "__main__":
     args = tyro.cli(Args)
 
-    s3 = boto3.client("s3") if args.upload_to_s3 else None
     queue = multiprocessing.JoinableQueue()
     count = multiprocessing.Value("i", 0)
 
@@ -67,7 +72,7 @@ if __name__ == "__main__":
         for worker_i in range(args.workers_per_gpu):
             worker_i = gpu_i * args.workers_per_gpu + worker_i
             process = multiprocessing.Process(
-                target=worker, args=(queue, count, gpu_i, s3)
+                target=worker, args=(queue, count, gpu_i, None)
             )
             process.daemon = True
             process.start()
@@ -77,8 +82,13 @@ if __name__ == "__main__":
         model_paths = json.load(f)
 
     input_dir = os.path.dirname(args.input_models_path)
+    cnt = 0
     for item in model_paths:
+        if cnt == 10000:
+            break
+        print(model_paths[item])
         queue.put(os.path.join(input_dir,model_paths[item]))
+        cnt+=1
 
     # Wait for all tasks to be completed
     queue.join()

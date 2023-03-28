@@ -39,12 +39,13 @@ parser.add_argument(
     required=True,
     help="Path to the object file",
 )
-parser.add_argument("--output_dir", type=str, default="views")
+parser.add_argument("--output_dir", type=str, default="./views")
 parser.add_argument(
     "--engine", type=str, default="CYCLES", choices=["CYCLES", "BLENDER_EEVEE"]
 )
 parser.add_argument("--scale", type=float, default=0.8)
 parser.add_argument("--num_images", type=int, default=8)
+parser.add_argument("--gpu_index", type=int, default=0)
 parser.add_argument("--camera_dist", type=int, default=1.2)
 
 argv = sys.argv[sys.argv.index("--") + 1 :]
@@ -77,12 +78,13 @@ bpy.data.objects["Area"].scale[2] = 100
 render.engine = args.engine
 render.image_settings.file_format = "PNG"
 render.image_settings.color_mode = "RGBA"
+render.image_settings.color_depth = "16"
 render.resolution_x = 512
 render.resolution_y = 512
 render.resolution_percentage = 100
 
 scene.cycles.device = "GPU"
-scene.cycles.samples = 128
+scene.cycles.samples = 32
 scene.cycles.diffuse_bounces = 1
 scene.cycles.glossy_bounces = 1
 scene.cycles.transparent_max_bounces = 3
@@ -91,11 +93,69 @@ scene.cycles.filter_width = 0.01
 scene.cycles.use_denoising = True
 scene.render.film_transparent = True
 
-bpy.context.preferences.addons["cycles"].preferences.get_devices()
 # Set the device_type
 bpy.context.preferences.addons[
     "cycles"
-].preferences.compute_device_type = "CUDA" # or "OPENCL"
+].preferences.compute_device_type = "CUDA"
+
+bpy.context.preferences.addons["cycles"].preferences.get_devices()
+
+# Enable only the specified GPU
+available_gpus = [device for device in bpy.context.preferences.addons['cycles'].preferences.devices if device.type == 'CUDA' or device.type == 'OPTIX']
+for i, gpu in enumerate(available_gpus):
+    gpu.use = (i == args.gpu_index)
+
+def get_max_camera_distance():
+    max_distance = 0
+    for obj in bpy.context.scene.objects:
+        if obj.type == 'MESH':
+            for vertex in obj.data.vertices:
+                global_vertex = obj.matrix_world @ vertex.co
+                distance = (bpy.context.scene.camera.location - global_vertex).length
+                max_distance = max(max_distance, distance)
+    return max_distance
+
+def setup_depth_nodes(output_dir):
+    # Enable 'Use Nodes' in the compositor
+    bpy.context.scene.use_nodes = True
+
+    # Enable 'Mist' pass in the View Layer properties
+    bpy.context.view_layer.use_pass_mist = True
+
+    # Set Mist settings
+    bpy.context.scene.world.mist_settings.use_mist = True
+    bpy.context.scene.world.mist_settings.start = 0.0
+
+    max_camera_distance = get_max_camera_distance()
+    bpy.context.scene.world.mist_settings.depth = max_camera_distance
+
+    # Get the existing nodes
+    nodes = bpy.context.scene.node_tree.nodes
+
+    # Clear all existing nodes
+    for node in nodes:
+        nodes.remove(node)
+
+    # Create a new Render Layers node and a File Output node for the depth image
+    render_layers_node = nodes.new(type="CompositorNodeRLayers")
+    normalize_node = nodes.new(type="CompositorNodeMath")
+    depth_file_output_node = nodes.new(type="CompositorNodeOutputFile")
+
+    # Set the normalize node settings
+    normalize_node.operation = "DIVIDE"
+    normalize_node.inputs[1].default_value = bpy.context.scene.world.mist_settings.depth  # Divide by the mist depth
+
+    # Set the depth file output settings
+    depth_file_output_node.format.file_format = "PNG"
+    depth_file_output_node.format.color_depth = "16"
+    depth_file_output_node.file_slots[0].path = "depth_"
+
+    # Connect the Mist output of the Render Layers node to the File Output node's image input
+    links = bpy.context.scene.node_tree.links
+    link = links.new(render_layers_node.outputs["Mist"], normalize_node.inputs[0])
+    link = links.new(normalize_node.outputs[0], depth_file_output_node.inputs[0])
+
+    return depth_file_output_node
 
 def sample_point_on_sphere(radius: float) -> Tuple[float, float, float]:
     theta = random.random() * 2 * math.pi
@@ -322,6 +382,7 @@ def save_images(object_file: str) -> None:
     # load the object
     load_object(object_file)
     object_uid = os.path.basename(object_file).split(".")[0]
+    depth_path = os.path.join(args.output_dir, object_uid)
     normalize_scene()
 
     # create an empty object to track
@@ -330,6 +391,8 @@ def save_images(object_file: str) -> None:
     cam_constraint.target = empty
 
     randomize_lighting()
+    depth_file_output_node = setup_depth_nodes(depth_path)
+
     for i in range(args.num_images):
         # # set the camera position
         # theta = (i / args.num_images) * math.pi * 2
@@ -348,6 +411,9 @@ def save_images(object_file: str) -> None:
         # render the image
         render_path = os.path.join(args.output_dir, object_uid, f"{i:03d}.png")
         scene.render.filepath = render_path
+
+        depth_file_output_node.base_path = depth_path
+        depth_file_output_node.file_slots[0].path = f"depth_{str(i).zfill(3)}"
         bpy.ops.render.render(write_still=True)
 
         # save camera RT matrix
