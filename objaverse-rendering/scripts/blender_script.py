@@ -44,7 +44,7 @@ parser.add_argument(
     "--engine", type=str, default="CYCLES", choices=["CYCLES", "BLENDER_EEVEE"]
 )
 parser.add_argument("--scale", type=float, default=0.8)
-parser.add_argument("--num_images", type=int, default=8)
+parser.add_argument("--num_images", type=int, default=12)
 parser.add_argument("--gpu_index", type=int, default=0)
 parser.add_argument("--camera_dist", type=int, default=1.2)
 parser.add_argument("--render_depth", action='store_true', help='if render depth map too')
