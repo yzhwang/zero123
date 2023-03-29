@@ -39,7 +39,7 @@ parser.add_argument(
     required=True,
     help="Path to the object file",
 )
-parser.add_argument("--output_dir", type=str, default="./views")
+parser.add_argument("--output_dir", type=str, default="/mnt/aiops/common/digital-twin/objaverse/rendered_views")
 parser.add_argument(
     "--engine", type=str, default="CYCLES", choices=["CYCLES", "BLENDER_EEVEE"]
 )
@@ -47,6 +47,7 @@ parser.add_argument("--scale", type=float, default=0.8)
 parser.add_argument("--num_images", type=int, default=8)
 parser.add_argument("--gpu_index", type=int, default=0)
 parser.add_argument("--camera_dist", type=int, default=1.2)
+parser.add_argument("--render_depth", action='store_true', help='if render depth map too')
 
 argv = sys.argv[sys.argv.index("--") + 1 :]
 args = parser.parse_args(argv)
@@ -148,7 +149,6 @@ def setup_depth_nodes(output_dir):
     # Set the depth file output settings
     depth_file_output_node.format.file_format = "PNG"
     depth_file_output_node.format.color_depth = "16"
-    depth_file_output_node.file_slots[0].path = "depth_"
 
     # Connect the Mist output of the Render Layers node to the File Output node's image input
     links = bpy.context.scene.node_tree.links
@@ -382,7 +382,6 @@ def save_images(object_file: str) -> None:
     # load the object
     load_object(object_file)
     object_uid = os.path.basename(object_file).split(".")[0]
-    depth_path = os.path.join(args.output_dir, object_uid)
     normalize_scene()
 
     # create an empty object to track
@@ -391,7 +390,9 @@ def save_images(object_file: str) -> None:
     cam_constraint.target = empty
 
     randomize_lighting()
-    depth_file_output_node = setup_depth_nodes(depth_path)
+    if args.render_depth:
+        depth_path = os.path.join(args.output_dir, object_uid)
+        depth_file_output_node = setup_depth_nodes(depth_path)
 
     for i in range(args.num_images):
         # # set the camera position
@@ -412,8 +413,9 @@ def save_images(object_file: str) -> None:
         render_path = os.path.join(args.output_dir, object_uid, f"{i:03d}.png")
         scene.render.filepath = render_path
 
-        depth_file_output_node.base_path = depth_path
-        depth_file_output_node.file_slots[0].path = f"depth_{str(i).zfill(3)}"
+        if args.render_depth:
+            depth_file_output_node.base_path = depth_path
+            depth_file_output_node.file_slots[0].path = f"depth_{str(i).zfill(3)}"
         bpy.ops.render.render(write_still=True)
 
         # save camera RT matrix
